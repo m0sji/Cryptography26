@@ -157,13 +157,22 @@ def decrypt(ciphertext, key):
     return plaintext
 
 
-def validate_input(text):
-    allowed = "AĂÂBCDEFGHIÎKLMNOPQRSȘTȚUVWXYZaăâbcdefghiîklmnopqrsștțuvwxyz "
-    
+def validate_input(text, allow_j=True):
+    # J is not in the matrix, but keys and messages may contain it: it is merged into I.
+    # Ciphertext can never contain J, so it is rejected there.
+    allowed = ALPHABET + ALPHABET.lower() + " "
+    if allow_j:
+        allowed += "Jj"
+
     for char in text:
         if char not in allowed:
             return False
     return True
+
+
+def count_distinct_letters(key):
+    # Distinct matrix letters in the key (J counts as I, repeats count once)
+    return len(set(prepare_text(key)))
 
 
 def main():
@@ -181,17 +190,18 @@ def main():
         return
     
     while True:
-        key = normalize_diacritics(input("\nEnter key (minimum 7 letters): ").strip())
+        key = normalize_diacritics(input("\nEnter key (minimum 7 different letters): ").strip())
 
-        if len(key.replace(' ', '')) < 7:
-            print("Key must contain at least 7 letters (spaces are not counted)!")
-            continue
-        
         if not validate_input(key):
             print("Key contains invalid characters!")
             print("Allowed: A-Z, a-z, Ă, Â, Î, Ș, Ț")
             continue
-        
+
+        if count_distinct_letters(key) < 7:
+            print("Key must contain at least 7 different letters!")
+            print("Repeated letters and spaces are not counted, and J counts as I.")
+            continue
+
         break
     
     if choice == '1':
@@ -220,9 +230,9 @@ def main():
         while True:
             ciphertext = normalize_diacritics(input("\nEnter ciphertext to decrypt: ").strip())
 
-            if not validate_input(ciphertext):
+            if not validate_input(ciphertext, allow_j=False):
                 print("Ciphertext contains invalid characters!")
-                print("Allowed: A-Z, a-z, Ă, Â, Î, Ș, Ț")
+                print("Allowed: A-Z (except J), a-z (except j), Ă, Â, Î, Ș, Ț")
                 continue
 
             if not ciphertext:
