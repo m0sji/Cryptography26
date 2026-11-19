@@ -1,282 +1,191 @@
-# Romanian alphabet without J (30 letters fill the 5x6 matrix exactly)
+# Playfair cipher for Romanian messages (31-letter alphabet).
+#
+# Playfair encrypts the message two letters at a time (in pairs) using a
+# key matrix. The Romanian alphabet has 31 letters; J shares a cell with I,
+# so the remaining 30 letters fill a 5x6 matrix exactly.
+
+# The 30 matrix letters in alphabetical order (J is missing on purpose)
 ALPHABET = "AĂÂBCDEFGHIÎKLMNOPQRSȘTȚUVWXYZ"
 ROWS, COLS = 5, 6
-
-
-def create_playfair_matrix(key):
-    """Build the 5x6 key matrix: the key's letters first, then the rest of the alphabet."""
-    # J has no cell of its own, so it shares I's cell
-    key = key.upper().replace('J', 'I')
-    seen = set()
-    processed_key = []
-
-    # Keep each key letter only the first time it appears, preserving order.
-    # Anything outside the alphabet (e.g. spaces) is dropped.
-    for char in key:
-        if char in ALPHABET and char not in seen:
-            seen.add(char)
-            processed_key.append(char)
-
-    # Fill the remaining cells with the unused letters in alphabetical order
-    matrix_chars = processed_key.copy()
-    for char in ALPHABET:
-        if char not in seen:
-            matrix_chars.append(char)
-
-    # Cut the flat list of 30 letters into 5 rows of 6
-    matrix = []
-    for i in range(0, ROWS * COLS, COLS):
-        row = matrix_chars[i:i+COLS]
-        matrix.append(row)
-
-    return matrix
-
-
-def find_position(matrix, char):
-    """Return (row, column) of a letter in the matrix, or (None, None) if it is absent."""
-    for i, row in enumerate(matrix):
-        for j, c in enumerate(row):
-            if c == char:
-                return i, j
-    return None, None
-
-
-def print_matrix(matrix):
-    print("\nPlayfair Matrix:")
-    for row in matrix:
-        print(' '.join(row))
-    print()
-
-
-def normalize_diacritics(text):
-    # Map cedilla forms (Ş, ş, Ţ, ţ) to the comma-below letters used in the alphabet
-    return text.translate(str.maketrans("ŞşŢţ", "ȘșȚț"))
+MIN_KEY_LENGTH = 7  # required by the task
 
 
 def prepare_text(text):
-    """Uppercase the text, merge J into I and drop everything that is not a matrix letter."""
-    text = text.upper().replace('J', 'I')
-    cleaned = ''.join([c for c in text if c in ALPHABET])
-    return cleaned
+    """Uppercase, merge J into I and keep only matrix letters (drops spaces).
+
+    Example: "Jaf mare" -> "IAFMARE"
+    """
+    text = text.upper().replace("J", "I")
+    return "".join(c for c in text if c in ALPHABET)
+
+
+def create_matrix(key):
+    """Build the 5x6 key matrix.
+
+    The key's letters come first, each only once (MOLDOVA -> MOLDVA),
+    followed by the remaining alphabet letters in alphabetical order.
+    """
+    letters = []
+    # Walking through key + alphabet and skipping letters already taken
+    # removes repeats from the key and the alphabet letters the key already used
+    for c in prepare_text(key) + ALPHABET:
+        if c not in letters:
+            letters.append(c)
+    # Cut the flat list of 30 letters into 5 rows of 6
+    return [letters[i:i + COLS] for i in range(0, ROWS * COLS, COLS)]
+
+
+def find_position(matrix, char):
+    """Return (row, column) of a letter in the matrix."""
+    # The letter is always found: the input was validated and cleaned
+    # by prepare_text, so it only contains matrix letters
+    for row, letters in enumerate(matrix):
+        if char in letters:
+            return row, letters.index(char)
+
+
+def chunks(text):
+    """Cut text into consecutive 2-letter pieces: "ABCD" -> ["AB", "CD"]."""
+    return [text[i:i + 2] for i in range(0, len(text), 2)]
 
 
 def split_into_pairs(text):
-    """Split plaintext into digraphs, inserting fillers where Playfair requires them."""
+    """Split the plaintext into pairs that Playfair can encrypt.
+
+    A pair cannot contain the same letter twice, and the last letter needs
+    a partner, so in both cases a filler is added. The filler is X, or Q
+    when the letter itself is X (so an XX pair never appears).
+    Example: "SUCCES" -> SU CX CE SX
+    """
     pairs = []
     i = 0
-
     while i < len(text):
-        # Use Q as filler after X so a pair never becomes XX
-        filler = 'Q' if text[i] == 'X' else 'X'
-
-        if i == len(text) - 1:
-            # Last letter has no partner: pad it with the filler
-            pairs.append(text[i] + filler)
-            i += 1
-        elif text[i] == text[i + 1]:
-            # A pair of identical letters cannot be encrypted: put the filler
-            # between them and advance by one, so the second letter starts the next pair
-            pairs.append(text[i] + filler)
-            i += 1
-        else:
-            # Normal case: consume two letters
-            pairs.append(text[i] + text[i + 1])
+        a = text[i]
+        if i + 1 < len(text) and text[i + 1] != a:
+            # Normal case: the next letter is different, so the two form a pair
+            pairs.append(a + text[i + 1])
             i += 2
-
+        else:
+            # Doubled letter or unpaired last letter: pair it with the filler.
+            # Move forward by one only, so the second of the doubled letters
+            # starts the next pair
+            pairs.append(a + ("Q" if a == "X" else "X"))
+            i += 1
     return pairs
 
 
-def encrypt_pair(matrix, pair):
-    """Encrypt one digraph using the three Playfair rules."""
-    char1, char2 = pair[0], pair[1]
+def transform_pair(matrix, pair, shift):
+    """Apply the Playfair rules to one pair: shift=1 encrypts, shift=-1 decrypts.
 
-    row1, col1 = find_position(matrix, char1)
-    row2, col2 = find_position(matrix, char2)
+    Decryption is encryption with the moves reversed (left instead of right,
+    up instead of down), so one function handles both.
+    """
+    r1, c1 = find_position(matrix, pair[0])
+    r2, c2 = find_position(matrix, pair[1])
 
-    # Safety net: leave the pair unchanged if a letter is not in the matrix
-    if row1 is None or row2 is None:
-        return pair
+    # The % operator wraps around the edges: moving right from the last
+    # column goes back to the first one, moving up from the first row
+    # goes to the last one, and so on
 
-    # Same row: take the letter to the right of each (wrapping to the row start)
-    if row1 == row2:
-        new_col1 = (col1 + 1) % COLS
-        new_col2 = (col2 + 1) % COLS
-        return matrix[row1][new_col1] + matrix[row2][new_col2]
+    # Rule 1 - same row: each letter is replaced by its neighbour
+    # to the right (encrypt) or to the left (decrypt)
+    if r1 == r2:
+        return matrix[r1][(c1 + shift) % COLS] + matrix[r2][(c2 + shift) % COLS]
 
-    # Same column: take the letter below each (wrapping to the top)
-    elif col1 == col2:
-        new_row1 = (row1 + 1) % ROWS
-        new_row2 = (row2 + 1) % ROWS
-        return matrix[new_row1][col1] + matrix[new_row2][col2]
+    # Rule 2 - same column: each letter is replaced by its neighbour
+    # below (encrypt) or above (decrypt)
+    if c1 == c2:
+        return matrix[(r1 + shift) % ROWS][c1] + matrix[(r2 + shift) % ROWS][c2]
 
-    # Rectangle: each letter keeps its row and takes the other letter's column
-    else:
-        return matrix[row1][col2] + matrix[row2][col1]
-
-
-def decrypt_pair(matrix, pair):
-    """Decrypt one digraph: the inverse of encrypt_pair (shift left/up instead of right/down)."""
-    char1, char2 = pair[0], pair[1]
-
-    row1, col1 = find_position(matrix, char1)
-    row2, col2 = find_position(matrix, char2)
-
-    # Safety net: leave the pair unchanged if a letter is not in the matrix
-    if row1 is None or row2 is None:
-        return pair
-
-    # Same row: take the letter to the left of each (wrapping to the row end)
-    if row1 == row2:
-        new_col1 = (col1 - 1) % COLS
-        new_col2 = (col2 - 1) % COLS
-        return matrix[row1][new_col1] + matrix[row2][new_col2]
-
-    # Same column: take the letter above each (wrapping to the bottom)
-    elif col1 == col2:
-        new_row1 = (row1 - 1) % ROWS
-        new_row2 = (row2 - 1) % ROWS
-        return matrix[new_row1][col1] + matrix[new_row2][col2]
-
-    # Rectangle: swapping columns is its own inverse, so it is the same as in encryption
-    else:
-        return matrix[row1][col2] + matrix[row2][col1]
+    # Rule 3 - rectangle: each letter keeps its row and takes the other
+    # letter's column. Swapping the columns again gives back the original
+    # pair, so this rule is the same for encryption and decryption
+    return matrix[r1][c2] + matrix[r2][c1]
 
 
-def encrypt(plaintext, key):
-    """Encrypt a message: build the matrix, clean the text, pair it up, encrypt each pair."""
-    matrix = create_playfair_matrix(key)
-    prepared = prepare_text(plaintext)
-    pairs = split_into_pairs(prepared)
-
-    # Show the intermediate steps so the result can be checked by hand
-    print("Prepared text:", prepared)
-    print("Pairs:", ' '.join(pairs))
-    print_matrix(matrix)
-
-    encrypted_pairs = [encrypt_pair(matrix, pair) for pair in pairs]
-    ciphertext = ''.join(encrypted_pairs)
-
-    return ciphertext
+def encrypt(plaintext, matrix):
+    """Clean the message, split it into pairs and encrypt each pair."""
+    pairs = split_into_pairs(prepare_text(plaintext))
+    print("\nPairs:", " ".join(pairs))
+    return "".join(transform_pair(matrix, p, 1) for p in pairs)
 
 
-def decrypt(ciphertext, key):
-    """Decrypt a ciphertext with the same key. Fillers stay in the output."""
-    matrix = create_playfair_matrix(key)
-    prepared = prepare_text(ciphertext)
+def decrypt(ciphertext, matrix):
+    """Split the ciphertext into pairs and decrypt each pair.
 
-    # Ciphertext is already made of valid digraphs, so it is simply cut every
-    # two letters (no fillers needed; main() guarantees an even length)
-    pairs = [prepared[i:i+2] for i in range(0, len(prepared), 2)]
-
-    print("Prepared ciphertext:", prepared)
-    print("Pairs:", ' '.join(pairs))
-    print_matrix(matrix)
-    
-    decrypted_pairs = [decrypt_pair(matrix, pair) for pair in pairs]
-    plaintext = ''.join(decrypted_pairs)
-    
-    return plaintext
+    The ciphertext is already made of valid pairs, so no fillers are added.
+    The fillers inserted during encryption stay in the decrypted text.
+    """
+    pairs = chunks(prepare_text(ciphertext))
+    print("\nPairs:", " ".join(pairs))
+    return "".join(transform_pair(matrix, p, -1) for p in pairs)
 
 
-def validate_input(text, allow_j=True):
-    """Return True if the text contains only alphabet letters (either case) and spaces."""
-    # J is not in the matrix, but keys and messages may contain it: it is merged into I.
-    # Ciphertext can never contain J, so it is rejected there.
-    allowed = ALPHABET + ALPHABET.lower() + " "
-    if allow_j:
-        allowed += "Jj"
+def read_text(prompt, allow_j=True):
+    """Ask until the input is non-empty and contains only alphabet letters and spaces.
 
-    for char in text:
-        if char not in allowed:
-            return False
-    return True
-
-
-def count_distinct_letters(key):
-    # Distinct matrix letters in the key (J counts as I, repeats count once)
-    return len(set(prepare_text(key)))
+    allow_j=False is used for the ciphertext: J has no cell in the matrix,
+    so it can never appear in a real ciphertext. In the key and the message
+    J is allowed and later turned into I.
+    """
+    # Uppercase and lowercase letters plus spaces (spaces are removed later)
+    allowed = ALPHABET + ALPHABET.lower() + " " + ("Jj" if allow_j else "")
+    while True:
+        # Some keyboards type Ş/Ţ (with a cedilla) instead of the correct
+        # Romanian Ș/Ț (with a comma below), so convert them before checking
+        text = input(prompt).strip().translate(str.maketrans("ŞşŢţ", "ȘșȚț"))
+        if not text:
+            print("Input cannot be empty!")
+        elif any(c not in allowed for c in text):
+            # Tell the user which characters are accepted, as the task requires
+            print("Invalid characters! Allowed: A-Z, a-z, Ă, Â, Î, Ș, Ț"
+                  + ("" if allow_j else " (except J)"))
+        else:
+            return text
 
 
 def main():
-    print("Playfair Cipher - Lab 3")
-    print()
-    
-    print("Choose operation:")
-    print("1. Encrypt")
-    print("2. Decrypt")
-    
+    # Step 1: choose the operation
+    print("Playfair Cipher - Lab 3\n1. Encrypt\n2. Decrypt")
     choice = input("\nEnter option (1/2): ").strip()
-    
-    if choice not in ['1', '2']:
+    if choice not in ("1", "2"):
         print("Invalid option!")
         return
-    
-    # Keep asking until the key is valid (the key is needed for both operations)
+
+    # Step 2: read the key. Its length is the number of letters it has,
+    # repeats included (MOLDOVA counts as 7) and spaces excluded
     while True:
-        key = normalize_diacritics(input("\nEnter key (minimum 7 different letters): ").strip())
-
-        if not validate_input(key):
-            print("Key contains invalid characters!")
-            print("Allowed: A-Z, a-z, Ă, Â, Î, Ș, Ț")
-            continue
-
-        if count_distinct_letters(key) < 7:
-            print("Key must contain at least 7 different letters!")
-            print("Repeated letters and spaces are not counted, and J counts as I.")
-            continue
-
-        break
-    
-    if choice == '1':
-        while True:
-            plaintext = normalize_diacritics(input("\nEnter message to encrypt: ").strip())
-            
-            if not validate_input(plaintext):
-                print("Message contains invalid characters!")
-                print("Allowed: A-Z, a-z, Ă, Â, Î, Ș, Ț")
-                continue
-            
-            if not plaintext:
-                print("Message cannot be empty!")
-                continue
-            
+        key = read_text(f"\nEnter key (minimum {MIN_KEY_LENGTH} letters): ")
+        if len(prepare_text(key)) >= MIN_KEY_LENGTH:
             break
-        
-        print("\n--- ENCRYPTION ---")
-        ciphertext = encrypt(plaintext, key)
-        
-        print("Ciphertext:", ciphertext)
-        # Also print it grouped in digraphs, which is easier to read
-        spaced =' '.join([ciphertext[i:i+2] for i in range(0, len(ciphertext), 2)])
-        print("Ciphertext (spaced):", spaced)
-        
+        print(f"Key must contain at least {MIN_KEY_LENGTH} letters (spaces are not counted)!")
+
+    # Step 3: build the key matrix and show it
+    matrix = create_matrix(key)
+    print("\nPlayfair Matrix:")
+    for row in matrix:
+        print(" ".join(row))
+
+    # Step 4: encrypt or decrypt. The result is printed in pairs for
+    # readability; it can be pasted back as it is, because spaces are allowed
+    if choice == "1":
+        plaintext = read_text("\nEnter message to encrypt: ")
+        print("Ciphertext:", " ".join(chunks(encrypt(plaintext, matrix))))
     else:
         while True:
-            ciphertext = normalize_diacritics(input("\nEnter ciphertext to decrypt: ").strip())
-
-            if not validate_input(ciphertext, allow_j=False):
-                print("Ciphertext contains invalid characters!")
-                print("Allowed: A-Z (except J), a-z (except j), Ă, Â, Î, Ș, Ț")
-                continue
-
-            if not ciphertext:
-                print("Ciphertext cannot be empty!")
-                continue
-
-            # Playfair always outputs whole digraphs, so an odd length means a corrupted ciphertext
-            if len(prepare_text(ciphertext)) % 2 != 0:
-                print("Ciphertext must have an even number of letters!")
-                continue
-
-            break
-        
-        print("\n--- DECRYPTION ---")
-        plaintext = decrypt(ciphertext, key)
-        
-        print("Decrypted text:", plaintext)
-        # Fillers cannot be removed automatically: an X may be a real letter of the message
-        print("\nNote: Remove filler 'X' (or 'Q' after an X) characters and add spaces manually.")
+            ciphertext = read_text("\nEnter ciphertext to decrypt: ", allow_j=False)
+            # Playfair always outputs whole pairs, so an odd number of
+            # letters means the ciphertext was typed or copied wrong
+            if len(prepare_text(ciphertext)) % 2 == 0:
+                break
+            print("Ciphertext must have an even number of letters!")
+        print("Decrypted text:", " ".join(chunks(decrypt(ciphertext, matrix))))
+        # The final step is manual, as the task requires: the program cannot
+        # tell a filler X from a real X in the message, and it cannot know
+        # where the original spaces were
+        print("Remove filler X (or Q after an X) and add spaces manually.")
 
 
+# Run main() only when the file is started directly, not when it is imported
 if __name__ == "__main__":
     main()
