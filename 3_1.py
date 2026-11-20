@@ -1,20 +1,13 @@
 # Playfair cipher for Romanian messages (31-letter alphabet).
-#
-# Playfair encrypts the message two letters at a time (in pairs) using a
-# key matrix. The Romanian alphabet has 31 letters; J shares a cell with I,
-# so the remaining 30 letters fill a 5x6 matrix exactly.
 
-# The 30 matrix letters in alphabetical order (J is missing on purpose)
+# The 30 matrix letters in alphabetical order 
 ALPHABET = "AĂÂBCDEFGHIÎKLMNOPQRSȘTȚUVWXYZ"
 ROWS, COLS = 5, 6
-MIN_KEY_LENGTH = 7  # required by the task
+MIN_KEY_LENGTH = 7  
 
 
 def prepare_text(text):
-    """Uppercase, merge J into I and keep only matrix letters (drops spaces).
-
-    Example: "Jaf mare" -> "IAFMARE"
-    """
+    """Uppercase, merge J into I and keep only matrix letters (drops spaces). """
     text = text.upper().replace("J", "I")
     return "".join(c for c in text if c in ALPHABET)
 
@@ -22,7 +15,7 @@ def prepare_text(text):
 def create_matrix(key):
     """Build the 5x6 key matrix.
 
-    The key's letters come first, each only once (MOLDOVA -> MOLDVA),
+    The key's letters come first, each only once,
     followed by the remaining alphabet letters in alphabetical order.
     """
     letters = []
@@ -53,9 +46,11 @@ def split_into_pairs(text):
     """Split the plaintext into pairs that Playfair can encrypt.
 
     A pair cannot contain the same letter twice, and the last letter needs
-    a partner, so in both cases a filler is added. The filler is X, or Q
-    when the letter itself is X (so an XX pair never appears).
-    Example: "SUCCES" -> SU CX CE SX
+    a partner, so in both cases a filler is added. The filler is X; Q is
+    used instead when X would give an XX pair or repeat the previous pair,
+    and Z when Q is not possible either.
+    Examples: "KISS" -> KI SX SQ
+              "CONGRESS SHALL" -> CO NG RE SX SQ SH AL LX
     """
     pairs = []
     i = 0
@@ -66,10 +61,15 @@ def split_into_pairs(text):
             pairs.append(a + text[i + 1])
             i += 2
         else:
-            # Doubled letter or unpaired last letter: pair it with the filler.
+            # Doubled letter or unpaired last letter: pair it with a filler.
+            # Take the first one from X, Q, Z that is not the letter itself
+            # and does not repeat the previous pair (SX SX -> SX SQ)
+            for filler in "XQZ":
+                if filler != a and (not pairs or pairs[-1] != a + filler):
+                    break
+            pairs.append(a + filler)
             # Move forward by one only, so the second of the doubled letters
             # starts the next pair
-            pairs.append(a + ("Q" if a == "X" else "X"))
             i += 1
     return pairs
 
@@ -183,7 +183,7 @@ def main():
         # The final step is manual, as the task requires: the program cannot
         # tell a filler X from a real X in the message, and it cannot know
         # where the original spaces were
-        print("Remove filler X (or Q after an X) and add spaces manually.")
+        print("Remove filler letters (X, Q or Z) and add spaces manually.")
 
 
 # Run main() only when the file is started directly, not when it is imported
